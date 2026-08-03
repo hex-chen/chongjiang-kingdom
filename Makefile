@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++17 -O2 -Wall -pthread
 
 all: server client
 
-server: src/server.cpp src/common.hpp
+server: src/server.cpp src/common.hpp src/ai.hpp
 	$(CXX) $(CXXFLAGS) -o $@ src/server.cpp
 
 client: src/client.cpp src/common.hpp

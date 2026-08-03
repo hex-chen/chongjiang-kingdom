@@ -992,9 +992,7 @@ struct Game {
     void run() {
         broadcast("");
         broadcast("🏰 ======= 冲奖王国 · 游戏开始 =======");
-        printf("[AI] 机器人发言: %s\n",
-               aiAvailable() ? "已接入 Claude API (claude-haiku-4-5)"
-                             : "本地台词 (设置 ANTHROPIC_API_KEY 可启用AI发言)");
+        printf("[AI] 机器人发言: %s\n", aiBackendDesc().c_str());
         assignRoles();
         try {
             while (true) {

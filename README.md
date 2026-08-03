@@ -34,19 +34,36 @@ make                # 编译出 server 和 client
 - 客户端看到黄色 `[ASK]` 提示时按提示输入(一般是座位号或 y/n);其他时候输入的内容作为聊天发出。
 - 玩家掉线后由机器人接管,游戏继续。
 
-### 让机器人真的会发言(可选,接入 Claude API)
+### 让机器人真的会发言(可选,两种方式)
 
-默认机器人只会说固定台词。在启动 `server` 前设置环境变量 `ANTHROPIC_API_KEY`
-(在 [platform.claude.com](https://platform.claude.com) 申请),机器人白天发言和遗言
-就会由 Claude(`claude-haiku-4-5`,最便宜的快速模型)根据局势实时生成——它们知道
-自己的身份,坏人会伪装带节奏,好人会分析推理:
+默认机器人只会说固定台词。配置 AI 后端后,机器人的白天发言和遗言会根据局势实时生成——
+它们知道自己的身份和最近的公开信息,坏人会伪装带节奏,好人会分析推理。
+两种后端按优先级选择,只需要**开服务端的那台电脑**配置(玩家客户端不用装任何东西):
+
+**方式一:Ollama 本地模型(推荐,完全本地部署,不需要联网和 API Key)**
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-xxxx     # Windows: set ANTHROPIC_API_KEY=sk-ant-xxxx
-./server --selftest 8                    # 看8个AI机器人互相对喷一整局
+# 1. 安装 Ollama: https://ollama.com  然后拉一个中文能力好的模型
+ollama pull qwen3:8b        # 或更小的 qwen3:4b; 显存大可用 gemma4 等
+
+# 2. 设置 OLLAMA_MODEL 后开服 (默认连 http://127.0.0.1:11434, 可用 OLLAMA_HOST 覆盖)
+export OLLAMA_MODEL=qwen3:8b            # Windows: set OLLAMA_MODEL=qwen3:8b
+./server --selftest 8                   # 看8个AI机器人互相对喷一整局
 ```
 
-实现上通过系统自带的 `curl` 调用 Messages API,无第三方库依赖;没有网络或调用失败时
+思考型模型(qwen3 / gemma4 等)会自动关闭思考模式(`think:false`),保证出话快、
+不吃 token;输出中的 `<think>` 残留也会被过滤。
+
+**方式二:Claude API(云端)**
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxxx    # 在 platform.claude.com 申请
+./server 5555 --bots 3
+```
+
+使用 `claude-haiku-4-5`(最便宜的快速模型,一句话约几厘钱)。
+
+实现上都是通过系统自带的 `curl` 调 HTTP API,无第三方库依赖;后端不可用或调用失败时
 自动退回本地台词,不影响游戏。投票和技能决策仍是随机的(只有嘴强)。
 
 ## 阵营与胜利条件
@@ -159,7 +176,7 @@ export ANTHROPIC_API_KEY=sk-ant-xxxx     # Windows: set ANTHROPIC_API_KEY=sk-ant
 - `src/server.cpp`:服务端 = 法官,持有全部游戏逻辑;每个客户端一个读线程,游戏主线程通过"提问-应答"(带超时)驱动流程;机器人玩家直接走随机决策。
 - `src/client.cpp`:瘦客户端,一个线程收消息打印,主线程读键盘发送。
 - `src/common.hpp`:跨平台 socket 封装(POSIX / Winsock)。
-- `src/ai.hpp`:机器人 AI 发言,通过 curl 调 Claude Messages API,失败自动退回本地台词。
+- `src/ai.hpp`:机器人 AI 发言,通过 curl 调 Ollama(本地)或 Claude API(云端),失败自动退回本地台词。
 - CI(GitHub Actions)在 Ubuntu / macOS / Windows(MSVC) 上编译并跑一整局机器人对战。
 - 协议:纯文本行协议。客户端首行 `JOIN 昵称`;服务端 `[ASK] ...` 开头的行表示需要输入;其余都是广播文本。
 - 想改规则(角色池、坏人比例、超时时间等)直接改 `server.cpp` 顶部对应函数即可,逻辑都集中在 `assignRoles` / `nightPhase` / `dayPhase`。
