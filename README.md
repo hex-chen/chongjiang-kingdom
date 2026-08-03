@@ -1,8 +1,10 @@
 # 冲奖王国 · 局域网多人推理游戏
 
-一个类狼人杀的局域网(LAN)多人推理游戏,C++17 编写,TCP 联机,附带机器人陪玩和全自动测试模式。
+一个类狼人杀的局域网(LAN)多人推理游戏,C++17 编写,TCP 联机,跨平台(macOS / Linux / Windows),附带机器人陪玩(可接入 Claude API 让机器人真的会说话)和全自动测试模式。
 
 ## 快速开始
+
+### macOS / Linux
 
 ```bash
 make                # 编译出 server 和 client
@@ -19,10 +21,33 @@ make                # 编译出 server 和 client
 ./server --selftest 10
 ```
 
+### Windows
+
+1. 安装 MinGW-w64 的 g++(推荐 [winlibs.com](https://winlibs.com) 或 MSYS2),或使用 Visual Studio;
+2. 双击或在 cmd 中运行 `build-windows.bat`,得到 `server.exe` / `client.exe`;
+   - MSVC 用户:在 Developer Command Prompt 中执行
+     `cl /std:c++17 /EHsc /utf-8 /O2 src\server.cpp /Fe:server.exe`(client 同理);
+3. 用法与上面相同:`server.exe 5555 --bots 3`,`client.exe 192.168.x.x 5555 昵称`。
+   建议用 Windows Terminal 运行(彩色和中文显示效果最好);第一次开服务端时防火墙弹窗选"允许"。
+
 - 人数:4 人起(含机器人),推荐 8~16 人。
 - 客户端看到黄色 `[ASK]` 提示时按提示输入(一般是座位号或 y/n);其他时候输入的内容作为聊天发出。
-- 玩家掉线后由 AI 接管,游戏继续。
-- 平台:macOS / Linux(Windows 可用 WSL)。
+- 玩家掉线后由机器人接管,游戏继续。
+
+### 让机器人真的会发言(可选,接入 Claude API)
+
+默认机器人只会说固定台词。在启动 `server` 前设置环境变量 `ANTHROPIC_API_KEY`
+(在 [platform.claude.com](https://platform.claude.com) 申请),机器人白天发言和遗言
+就会由 Claude(`claude-haiku-4-5`,最便宜的快速模型)根据局势实时生成——它们知道
+自己的身份,坏人会伪装带节奏,好人会分析推理:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxxx     # Windows: set ANTHROPIC_API_KEY=sk-ant-xxxx
+./server --selftest 8                    # 看8个AI机器人互相对喷一整局
+```
+
+实现上通过系统自带的 `curl` 调用 Messages API,无第三方库依赖;没有网络或调用失败时
+自动退回本地台词,不影响游戏。投票和技能决策仍是随机的(只有嘴强)。
 
 ## 阵营与胜利条件
 
@@ -133,5 +158,8 @@ make                # 编译出 server 和 client
 
 - `src/server.cpp`:服务端 = 法官,持有全部游戏逻辑;每个客户端一个读线程,游戏主线程通过"提问-应答"(带超时)驱动流程;机器人玩家直接走随机决策。
 - `src/client.cpp`:瘦客户端,一个线程收消息打印,主线程读键盘发送。
+- `src/common.hpp`:跨平台 socket 封装(POSIX / Winsock)。
+- `src/ai.hpp`:机器人 AI 发言,通过 curl 调 Claude Messages API,失败自动退回本地台词。
+- CI(GitHub Actions)在 Ubuntu / macOS / Windows(MSVC) 上编译并跑一整局机器人对战。
 - 协议:纯文本行协议。客户端首行 `JOIN 昵称`;服务端 `[ASK] ...` 开头的行表示需要输入;其余都是广播文本。
 - 想改规则(角色池、坏人比例、超时时间等)直接改 `server.cpp` 顶部对应函数即可,逻辑都集中在 `assignRoles` / `nightPhase` / `dayPhase`。

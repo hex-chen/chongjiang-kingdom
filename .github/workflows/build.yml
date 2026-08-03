@@ -1,0 +1,27 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  unix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: make
+      - name: Bot-only full game
+        run: ./server --selftest 8
+
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build server
+        run: cl /std:c++17 /EHsc /utf-8 /O2 src\server.cpp /Fe:server.exe
+      - name: Build client
+        run: cl /std:c++17 /EHsc /utf-8 /O2 src\client.cpp /Fe:client.exe
+      - name: Bot-only full game
+        run: .\server.exe --selftest 8

@@ -6,6 +6,7 @@
 //  平台: macOS / Linux (POSIX socket)
 // ============================================================
 #include "common.hpp"
+#include "ai.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -22,8 +23,11 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <cctype>
+#ifndef _WIN32
 #include <ifaddrs.h>
 #include <signal.h>
+#endif
 
 using std::string;
 using std::vector;
@@ -123,7 +127,7 @@ static const char *roleDesc(Role r) {
 struct Player {
     int id = 0;                  // 座位号, 1 起
     string name;
-    int fd = -1;
+    sock_t fd = BAD_SOCK;
     bool bot = false;
     std::atomic<bool> connected{false};
     Role role = R_CITIZEN;
@@ -156,6 +160,8 @@ struct Game {
     std::atomic<bool> started{false};
     std::atomic<bool> startRequested{false};
     int nightNo = 0, dayNo = 0;
+    std::deque<string> publicLog;       // 公开信息记录, 供AI机器人参考
+    int aiSeq = 0;
     std::map<int, bool> dying;          // 今晚将死: id -> 是否可被解药救
     vector<int> nightDead;              // 今晚实际死亡(含连锁)
     bool sonicTonight = false, pressureTonight = false;
@@ -165,18 +171,23 @@ struct Game {
 
     // ---------- 消息 ----------
     void sendTo(Player &p, const string &s) {
-        if (p.bot || !p.connected || p.fd < 0) { if (p.bot) return; }
+        if (p.bot) return;
         printf("  [私->%s] %s\n", p.name.c_str(), s.c_str());
-        if (!p.bot && p.connected && p.fd >= 0) {
+        if (p.connected && sockOk(p.fd)) {
             std::lock_guard<std::mutex> g(sendMx);
             sendLine(p.fd, s);
         }
     }
     void broadcast(const string &s) {
         printf("[公告] %s\n", s.c_str());
+        {
+            std::lock_guard<std::mutex> g(sendMx);
+            if (!s.empty()) publicLog.push_back(s);
+            while (publicLog.size() > 40) publicLog.pop_front();
+        }
         for (auto &up : ps) {
             Player &p = *up;
-            if (!p.bot && p.connected && p.fd >= 0) {
+            if (!p.bot && p.connected && sockOk(p.fd)) {
                 std::lock_guard<std::mutex> g(sendMx);
                 sendLine(p.fd, s);
             }
@@ -403,6 +414,27 @@ struct Game {
             sendTo(P(id), "😈 " + why + " 坏人阵营成员: " + listNames(bad));
     }
 
+    // ---------- AI 机器人发言 ----------
+    string recentLog(size_t n = 25) {
+        std::lock_guard<std::mutex> g(sendMx);
+        string s;
+        size_t start = publicLog.size() > n ? publicLog.size() - n : 0;
+        for (size_t i = start; i < publicLog.size(); i++) s += publicLog[i] + "\n";
+        return s;
+    }
+    string aiBotLine(Player &p, const string &task) {
+        if (!aiAvailable()) return "";
+        string sys =
+            "你在玩一款叫《冲奖王国》的中文社交推理游戏(类似狼人杀)。你是 " +
+            std::to_string(p.id) + "号玩家「" + p.name + "」, 真实身份是「" +
+            roleName(p.role) + "」(" + teamName(roleTeam(p.role)) +
+            ")。要求: 用口语化中文说一两句话(40字以内), 符合你的阵营利益——"
+            "坏人和第三方要伪装成好人、必要时带节奏; 好人可以分析推理或自保。"
+            "不要主动报出自己的具体身份名称, 不要加引号或任何前缀, 直接输出台词本身。";
+        string user = "最近的游戏公开信息:\n" + recentLog() + "\n" + task;
+        return aiChat(sys, user, ++aiSeq);
+    }
+    // ---------- 座位 ----------
     // 从 from 顺时针找下一个活人(跳过 from 本身)
     int nextAlive(int from) {
         for (int k = 1; k <= n(); k++) {
@@ -759,8 +791,10 @@ struct Game {
             Player &p = P(id);
             if (!p.alive) continue;
             string talk;
-            if (p.bot || !p.connected) talk = botTalks[rng() % 8];
-            else {
+            if (p.bot || !p.connected) {
+                talk = aiBotLine(p, "现在轮到你白天发言, 请发言。");
+                if (talk.empty()) talk = botTalks[rng() % 8];
+            } else {
                 broadcast("👉 请 " + std::to_string(id) + "号 " + p.name + " 发言…");
                 auto a = askRaw(p, "轮到你发言(输入一行, 直接回车=过):", 60);
                 talk = a ? *a : "(沉默)";
@@ -921,8 +955,10 @@ struct Game {
                 if (reveal) broadcast("🎴 " + ex.name + " 明牌: 【" + roleName(ex.role) + "】");
             }
             string lw;
-            if (ex.bot || !ex.connected) lw = "我看好你们……";
-            else {
+            if (ex.bot || !ex.connected) {
+                lw = aiBotLine(ex, "你刚刚被投票放逐了, 请说一句遗言(30字以内)。");
+                if (lw.empty()) lw = "我看好你们……";
+            } else {
                 auto a = askRaw(ex, "请留遗言(一行):", 40);
                 lw = a ? *a : "(无言离场)";
             }
@@ -956,6 +992,9 @@ struct Game {
     void run() {
         broadcast("");
         broadcast("🏰 ======= 冲奖王国 · 游戏开始 =======");
+        printf("[AI] 机器人发言: %s\n",
+               aiAvailable() ? "已接入 Claude API (claude-haiku-4-5)"
+                             : "本地台词 (设置 ANTHROPIC_API_KEY 可启用AI发言)");
         assignRoles();
         try {
             while (true) {
@@ -1022,7 +1061,7 @@ struct Game {
 
     void onDisconnect(Player *p) {
         p->connected = false;
-        if (p->fd >= 0) { close(p->fd); p->fd = -1; }
+        if (sockOk(p->fd)) { closesock(p->fd); p->fd = BAD_SOCK; }
         {
             std::lock_guard<std::mutex> lk(p->mx);
             p->cv.notify_all();
@@ -1036,7 +1075,7 @@ struct Game {
         string buf;
         char tmp[4096];
         while (true) {
-            ssize_t nrd = recv(p->fd, tmp, sizeof tmp, 0);
+            ssize_t nrd = recv(p->fd, tmp, (int)sizeof tmp, 0);
             if (nrd <= 0) { onDisconnect(p); return; }
             buf.append(tmp, (size_t)nrd);
             size_t pos;
@@ -1054,6 +1093,21 @@ static Game g;
 
 static void printLanIPs(int port) {
     printf("局域网连接方式: ./client <本机IP> %d <昵称>\n本机IP:\n", port);
+#ifdef _WIN32
+    char host[256] = {0};
+    gethostname(host, sizeof host);
+    addrinfo hints{}, *res = nullptr;
+    hints.ai_family = AF_INET;
+    if (getaddrinfo(host, nullptr, &hints, &res) == 0) {
+        for (auto *p = res; p; p = p->ai_next) {
+            char buf[64];
+            auto *sin = (sockaddr_in *)p->ai_addr;
+            inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof buf);
+            if (strcmp(buf, "127.0.0.1") != 0) printf("  %s\n", buf);
+        }
+        freeaddrinfo(res);
+    }
+#else
     struct ifaddrs *ifs = nullptr;
     if (getifaddrs(&ifs) == 0) {
         for (auto *i = ifs; i; i = i->ifa_next) {
@@ -1065,10 +1119,14 @@ static void printLanIPs(int port) {
         }
         freeifaddrs(ifs);
     }
+#endif
 }
 
 int main(int argc, char **argv) {
+    netInit();
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
     int port = 5555, bots = 0, selftest = 0;
     for (int i = 1; i < argc; i++) {
         string a = argv[i];
@@ -1093,9 +1151,9 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    sock_t lfd = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;
-    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof yes);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -1113,10 +1171,10 @@ int main(int argc, char **argv) {
         FD_ZERO(&fds);
         FD_SET(lfd, &fds);
         timeval tv{1, 0};
-        int r = select(lfd + 1, &fds, nullptr, nullptr, &tv);
+        int r = select((int)(lfd + 1), &fds, nullptr, nullptr, &tv);
         if (r > 0 && FD_ISSET(lfd, &fds)) {
-            int cfd = accept(lfd, nullptr, nullptr);
-            if (cfd < 0) continue;
+            sock_t cfd = accept(lfd, nullptr, nullptr);
+            if (!sockOk(cfd)) continue;
             auto p = std::make_unique<Player>();
             p->fd = cfd;
             p->connected = true;
@@ -1150,7 +1208,7 @@ int main(int argc, char **argv) {
     g.run();
 
     std::this_thread::sleep_for(seconds(2));
-    for (auto &up : g.ps) if (up->fd >= 0) close(up->fd);
+    for (auto &up : g.ps) if (sockOk(up->fd)) closesock(up->fd);
     for (auto &t : readers) t.detach();
     return 0;
 }

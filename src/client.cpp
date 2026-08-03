@@ -8,6 +8,7 @@
 #include <thread>
 
 int main(int argc, char **argv) {
+    netInit();
     if (argc < 2) {
         printf("用法: ./client <服务器IP> [端口=5555] [昵称]\n");
         return 1;
@@ -21,7 +22,7 @@ int main(int argc, char **argv) {
         if (!std::getline(std::cin, name)) return 0;
     }
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    sock_t fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
@@ -41,7 +42,7 @@ int main(int argc, char **argv) {
         std::string buf;
         char tmp[4096];
         while (true) {
-            ssize_t n = recv(fd, tmp, sizeof tmp, 0);
+            ssize_t n = recv(fd, tmp, (int)sizeof tmp, 0);
             if (n <= 0) {
                 printf("\n[与服务器断开连接]\n");
                 exit(0);
@@ -63,6 +64,6 @@ int main(int argc, char **argv) {
 
     std::string line;
     while (std::getline(std::cin, line)) sendLine(fd, line);
-    close(fd);
+    closesock(fd);
     return 0;
 }
