@@ -1213,7 +1213,8 @@ static void printLanIPs(int port) {
 }
 
 int main(int argc, char **argv) {
-    setvbuf(stdout, nullptr, _IOLBF, 0);  // 行缓冲: 重定向到文件时也能实时看到日志
+    setvbuf(stdout, nullptr, _IOLBF, 4096);  // 行缓冲: 重定向到文件时也能实时看到日志
+                                             // (MSVC 要求 size>=2, 不能传 0)
     netInit();
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
