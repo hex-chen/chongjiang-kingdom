@@ -163,6 +163,8 @@ struct Game {
     int nightNo = 0, dayNo = 0;
     std::deque<string> publicLog;       // 公开信息记录, 供AI机器人参考
     int aiSeq = 0;
+    int aiMode = 2;                     // 0=关闭 1=仅发言 2=发言+决策(默认)
+    int aiFailWarns = 0;                // AI调用失败时最多提示3次
     std::map<int, bool> dying;          // 今晚将死: id -> 是否可被解药救
     vector<int> nightDead;              // 今晚实际死亡(含连锁)
     bool sonicTonight = false, pressureTonight = false;
@@ -457,24 +459,33 @@ struct Game {
         return "最近的游戏公开信息:\n" + recentLog() +
                "\n你收到过的私密信息:\n" + privInfo(p) + "\n";
     }
+    void aiWarnFail() {
+        if (aiFailWarns < 3) {
+            aiFailWarns++;
+            printf("[AI] ⚠️ 调用失败, 本次退回默认行为: %s\n", g_aiLastError.c_str());
+        }
+    }
     // 发言/遗言
     string aiBotLine(Player &p, const string &task) {
-        if (!aiAvailable()) return "";
+        if (aiMode < 1 || !aiAvailable()) return "";
         string sys = aiIdentitySys(p) +
             " 现在要你发言: 用口语化中文说一两句话(40字以内), "
             "不要主动报出自己的具体身份名称, 不要加引号或任何前缀, 直接输出台词本身。";
-        return aiChat(sys, aiContext(p) + task, ++aiSeq);
+        string r = aiChat(sys, aiContext(p) + task, ++aiSeq);
+        if (r.empty()) aiWarnFail();
+        return r;
     }
     // 选目标: 返回选中的座位号; 0=主动放弃; -1=AI不可用/失败
     int aiBotChoose(Player &p, const string &question, const vector<int> &cand,
                     bool allowSkip) {
-        if (!aiAvailable() || cand.empty()) return -1;
+        if (aiMode < 2 || !aiAvailable() || cand.empty()) return -1;
         string user = aiContext(p) + "现在需要你做一个决定: " + question +
                       "\n可选目标: " + listNames(cand) +
                       "\n只输出一个数字(目标的座位号" +
                       (allowSkip ? ", 或 0 表示放弃/不使用)" : ")") +
                       ", 不要输出任何其他内容。";
         string a = aiChat(aiIdentitySys(p), user, ++aiSeq);
+        if (a.empty()) { aiWarnFail(); return -1; }
         size_t i = a.find_first_of("0123456789");
         if (i == string::npos) return -1;
         int v = 0;
@@ -485,10 +496,11 @@ struct Game {
     }
     // 是/否决策: 1=是, 0=否, -1=AI不可用/失败
     int aiBotYes(Player &p, const string &question) {
-        if (!aiAvailable()) return -1;
+        if (aiMode < 2 || !aiAvailable()) return -1;
         string user = aiContext(p) + "现在需要你做一个决定: " + question +
                       "\n只回答一个字母: y(是) 或 n(否), 不要输出任何其他内容。";
         string a = aiChat(aiIdentitySys(p), user, ++aiSeq);
+        if (a.empty()) { aiWarnFail(); return -1; }
         for (size_t i = 0; i < a.size(); i++) {
             char c = (char)tolower((unsigned char)a[i]);
             if (c == 'y') return 1;
@@ -1059,7 +1071,20 @@ struct Game {
     void run() {
         broadcast("");
         broadcast("🏰 ======= 冲奖王国 · 游戏开始 =======");
-        printf("[AI] 机器人发言: %s\n", aiBackendDesc().c_str());
+        printf("[AI] 机器人: %s [%s]\n", aiBackendDesc().c_str(),
+               aiMode == 0 ? "已关闭(--ai off)"
+               : aiMode == 1 ? "仅发言(--ai talk)" : "发言+决策(默认; --ai talk 可只发言)");
+        if (aiMode > 0 && aiAvailable()) {
+            // 开局自检: 立刻测一次, 失败把原因亮出来, 不再静默退回
+            string t = aiChat("你是连通性测试。", "只输出两个字母: OK", ++aiSeq);
+            if (t.empty()) {
+                printf("[AI] ⚠️ 自检失败: %s\n", g_aiLastError.c_str());
+                broadcast("⚠️ AI后端自检失败, 机器人将使用本地台词和随机决策 (原因见服务端日志)");
+            } else {
+                printf("[AI] 自检通过 ✓ (回复: %.40s)\n", t.c_str());
+                broadcast("🤖 AI机器人已就绪 (" + aiBackendDesc() + ")");
+            }
+        }
         assignRoles();
         try {
             while (true) {
@@ -1188,6 +1213,7 @@ static void printLanIPs(int port) {
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, nullptr, _IOLBF, 0);  // 行缓冲: 重定向到文件时也能实时看到日志
     netInit();
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
@@ -1197,6 +1223,10 @@ int main(int argc, char **argv) {
         string a = argv[i];
         if (a == "--bots" && i + 1 < argc) bots = atoi(argv[++i]);
         else if (a == "--selftest" && i + 1 < argc) selftest = atoi(argv[++i]);
+        else if (a == "--ai" && i + 1 < argc) {
+            string m = argv[++i];
+            g.aiMode = (m == "off") ? 0 : (m == "talk") ? 1 : 2;
+        }
         else if (atoi(a.c_str()) > 0) port = atoi(a.c_str());
     }
 

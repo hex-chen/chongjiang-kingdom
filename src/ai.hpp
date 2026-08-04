@@ -20,6 +20,8 @@
 #define AI_PCLOSE pclose
 #endif
 
+inline std::string g_aiLastError;  // 最近一次AI调用的失败原因
+
 inline const char *aiEnv(const char *name) {
     const char *v = getenv(name);
     return (v && *v) ? v : nullptr;
@@ -217,7 +219,17 @@ inline std::string aiChat(const std::string &systemPrompt, const std::string &us
         if (resp.find("\"error\"") != std::string::npos &&
             resp.find("\"message\"") == std::string::npos)
             resp = aiPost(url, "", makeBody(false), seq, 90);
-        return aiCleanup(aiExtractField(resp, "\"message\"", "content"));
+        if (resp.empty()) {
+            g_aiLastError = "无法连接 " + url + " (请确认 ollama 服务在运行)";
+            return "";
+        }
+        std::string text = aiCleanup(aiExtractField(resp, "\"message\"", "content"));
+        if (text.empty()) {
+            std::string err = aiExtractField(resp, "", "error");
+            g_aiLastError = !err.empty() ? "Ollama报错: " + err
+                                         : "响应解析为空: " + resp.substr(0, 150);
+        }
+        return text;
     }
     // Claude API
     std::string body =
@@ -229,6 +241,15 @@ inline std::string aiChat(const std::string &systemPrompt, const std::string &us
         " -H \"x-api-key: " + std::string(aiClaudeKey()) + "\""
         " -H \"anthropic-version: 2023-06-01\"";
     std::string resp = aiPost("https://api.anthropic.com/v1/messages", headers, body, seq, 15);
-    if (resp.find("\"type\":\"error\"") != std::string::npos) return "";
-    return aiCleanup(aiExtractField(resp, "", "text"));
+    if (resp.empty()) {
+        g_aiLastError = "无法连接 api.anthropic.com (网络问题或超时)";
+        return "";
+    }
+    if (resp.find("\"type\":\"error\"") != std::string::npos) {
+        g_aiLastError = "Claude API报错: " + aiExtractField(resp, "\"error\"", "message");
+        return "";
+    }
+    std::string text = aiCleanup(aiExtractField(resp, "", "text"));
+    if (text.empty()) g_aiLastError = "响应解析为空: " + resp.substr(0, 150);
+    return text;
 }

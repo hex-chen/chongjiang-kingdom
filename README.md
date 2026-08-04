@@ -47,9 +47,25 @@ make                # 编译出 server 和 client
 ollama pull qwen3:8b        # 或更小的 qwen3:4b; 显存大可用 gemma4 等
 
 # 2. 设置 OLLAMA_MODEL 后开服 (默认连 http://127.0.0.1:11434, 可用 OLLAMA_HOST 覆盖)
-export OLLAMA_MODEL=qwen3:8b            # Windows: set OLLAMA_MODEL=qwen3:8b
+export OLLAMA_MODEL=qwen3:8b            # Windows cmd:  set OLLAMA_MODEL=qwen3:8b
+                                        # PowerShell:   $env:OLLAMA_MODEL="qwen3:8b"
 ./server --selftest 8                   # 看8个AI机器人互相对喷一整局
 ```
+
+服务端启动时会**自检**并打印结果,一眼就能看出 AI 是否生效:
+
+```
+[AI] 机器人: Ollama 本地模型 qwen3:8b @ http://127.0.0.1:11434 [发言+决策]
+[AI] 自检通过 ✓ (回复: OK)
+```
+
+如果全是固定台词,按启动时的 `[AI]` 提示排查:
+- 显示"本地台词" → 环境变量没设上(必须在**启动 server 的同一个终端**里设;PowerShell 里 `set` 无效,要用 `$env:`);
+- "自检失败: 无法连接" → Ollama 服务没在运行(跑一下 `ollama serve` 或打开 Ollama 应用);
+- "Ollama报错: model not found" → 模型名和 `ollama list` 里的不一致(要带标签,如 `qwen3:8b`、`gemma4:latest`)。
+
+AI 参与程度可用 `--ai` 控制:默认**发言+决策**全接管;`--ai talk` 只让机器人说话、
+决策仍随机;`--ai off` 完全关闭。
 
 思考型模型(qwen3 / gemma4 等)会自动关闭思考模式(`think:false`),保证出话快、
 不吃 token;输出中的 `<think>` 残留也会被过滤。
