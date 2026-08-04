@@ -13,8 +13,9 @@ make                # 编译出 server 和 client
 ./server            # 默认端口 5555;终端会打印本机局域网 IP
 ./server 5555 --bots 3   # 真人不够时用 3 个机器人补齐
 
-# 其他玩家(同一局域网):
-./client 192.168.x.x 5555 你的昵称
+# 其他玩家(同一局域网), 两种方式任选:
+./client                      # 交互式: 按提示输入服务器地址和昵称 (Windows 直接双击 client.exe)
+./client 192.168.x.x 5555 你的昵称   # 或命令行直接指定
 
 # 房主在自己的 client 里输入 start 开始游戏
 # 纯机器人自动跑一局(测试/看规则演示):
@@ -27,7 +28,9 @@ make                # 编译出 server 和 client
 2. 双击或在 cmd 中运行 `build-windows.bat`,得到 `server.exe` / `client.exe`;
    - MSVC 用户:在 Developer Command Prompt 中执行
      `cl /std:c++17 /EHsc /utf-8 /O2 src\server.cpp /Fe:server.exe`(client 同理);
-3. 用法与上面相同:`server.exe 5555 --bots 3`,`client.exe 192.168.x.x 5555 昵称`。
+3. 玩家**直接双击 `client.exe`**,按提示输入服务器地址(如 `192.168.31.5` 或
+   `192.168.31.5:5555`)和昵称即可,连接失败可以重输;房主开服仍用命令行:
+   `server.exe 5555 --bots 3`。
    建议用 Windows Terminal 运行(彩色和中文显示效果最好);第一次开服务端时防火墙弹窗选"允许"。
 
 - 人数:4 人起(含机器人),推荐 8~16 人。
