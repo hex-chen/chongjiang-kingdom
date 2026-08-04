@@ -147,6 +147,7 @@ struct Player {
     std::condition_variable cv;
     std::deque<string> inbox;
     bool awaiting = false;
+    std::deque<string> privLog;  // 收到的私密信息 (供AI机器人决策参考)
 };
 
 // ---------------- 游戏主体 ----------------
@@ -171,6 +172,10 @@ struct Game {
 
     // ---------- 消息 ----------
     void sendTo(Player &p, const string &s) {
+        if (s.rfind("[ASK]", 0) != 0) {
+            p.privLog.push_back(s);
+            while (p.privLog.size() > 15) p.privLog.pop_front();
+        }
         if (p.bot) return;
         printf("  [私->%s] %s\n", p.name.c_str(), s.c_str());
         if (p.connected && sockOk(p.fd)) {
@@ -271,6 +276,9 @@ struct Game {
                   bool allowSkip, int tmo = 45, double botSkipP = 0.0) {
         if (cand.empty()) return -1;
         if (p.bot || !p.connected) {
+            int a = aiBotChoose(p, prompt, cand, allowSkip);
+            if (a > 0) return a;
+            if (a == 0 && allowSkip) return -1;
             if (allowSkip && frand() < botSkipP) return -1;
             return pick(cand);
         }
@@ -289,7 +297,11 @@ struct Game {
     }
 
     bool askYes(Player &p, const string &prompt, int tmo = 30, double botP = 0.3) {
-        if (p.bot || !p.connected) return frand() < botP;
+        if (p.bot || !p.connected) {
+            int r = aiBotYes(p, prompt);
+            if (r >= 0) return r == 1;
+            return frand() < botP;
+        }
         auto a = askRaw(p, prompt + " (y=是 / n=否)", tmo);
         if (!a) return false;
         string s = *a;
@@ -414,7 +426,7 @@ struct Game {
             sendTo(P(id), "😈 " + why + " 坏人阵营成员: " + listNames(bad));
     }
 
-    // ---------- AI 机器人发言 ----------
+    // ---------- AI 机器人 (发言 + 决策) ----------
     string recentLog(size_t n = 25) {
         std::lock_guard<std::mutex> g(sendMx);
         string s;
@@ -422,17 +434,69 @@ struct Game {
         for (size_t i = start; i < publicLog.size(); i++) s += publicLog[i] + "\n";
         return s;
     }
-    string aiBotLine(Player &p, const string &task) {
-        if (!aiAvailable()) return "";
+    string privInfo(Player &p, size_t n = 12) {
+        string s;
+        size_t start = p.privLog.size() > n ? p.privLog.size() - n : 0;
+        for (size_t i = start; i < p.privLog.size(); i++) s += p.privLog[i] + "\n";
+        return s.empty() ? "(暂无)\n" : s;
+    }
+    string aiIdentitySys(Player &p) {
         string sys =
             "你在玩一款叫《冲奖王国》的中文社交推理游戏(类似狼人杀)。你是 " +
             std::to_string(p.id) + "号玩家「" + p.name + "」, 真实身份是「" +
-            roleName(p.role) + "」(" + teamName(roleTeam(p.role)) +
-            ")。要求: 用口语化中文说一两句话(40字以内), 符合你的阵营利益——"
-            "坏人和第三方要伪装成好人、必要时带节奏; 好人可以分析推理或自保。"
+            roleName(p.role) + "」(" + teamName(roleTeam(p.role)) + "), 技能: " +
+            roleDesc(p.role) + "。";
+        if (roleTeam(p.role) == BAD) {
+            auto bad = aliveBad();
+            if (!bad.empty()) sys += " 你的坏人队友(勿伤害/勿投票): " + listNames(bad) + "。";
+        }
+        sys += " 你的决策和发言都要服务于自己阵营的胜利条件; 坏人和第三方要伪装成好人。";
+        return sys;
+    }
+    string aiContext(Player &p) {
+        return "最近的游戏公开信息:\n" + recentLog() +
+               "\n你收到过的私密信息:\n" + privInfo(p) + "\n";
+    }
+    // 发言/遗言
+    string aiBotLine(Player &p, const string &task) {
+        if (!aiAvailable()) return "";
+        string sys = aiIdentitySys(p) +
+            " 现在要你发言: 用口语化中文说一两句话(40字以内), "
             "不要主动报出自己的具体身份名称, 不要加引号或任何前缀, 直接输出台词本身。";
-        string user = "最近的游戏公开信息:\n" + recentLog() + "\n" + task;
-        return aiChat(sys, user, ++aiSeq);
+        return aiChat(sys, aiContext(p) + task, ++aiSeq);
+    }
+    // 选目标: 返回选中的座位号; 0=主动放弃; -1=AI不可用/失败
+    int aiBotChoose(Player &p, const string &question, const vector<int> &cand,
+                    bool allowSkip) {
+        if (!aiAvailable() || cand.empty()) return -1;
+        string user = aiContext(p) + "现在需要你做一个决定: " + question +
+                      "\n可选目标: " + listNames(cand) +
+                      "\n只输出一个数字(目标的座位号" +
+                      (allowSkip ? ", 或 0 表示放弃/不使用)" : ")") +
+                      ", 不要输出任何其他内容。";
+        string a = aiChat(aiIdentitySys(p), user, ++aiSeq);
+        size_t i = a.find_first_of("0123456789");
+        if (i == string::npos) return -1;
+        int v = 0;
+        while (i < a.size() && a[i] >= '0' && a[i] <= '9') v = v * 10 + (a[i++] - '0');
+        if (v == 0 && allowSkip) return 0;
+        if (contains(cand, v)) return v;
+        return -1;
+    }
+    // 是/否决策: 1=是, 0=否, -1=AI不可用/失败
+    int aiBotYes(Player &p, const string &question) {
+        if (!aiAvailable()) return -1;
+        string user = aiContext(p) + "现在需要你做一个决定: " + question +
+                      "\n只回答一个字母: y(是) 或 n(否), 不要输出任何其他内容。";
+        string a = aiChat(aiIdentitySys(p), user, ++aiSeq);
+        for (size_t i = 0; i < a.size(); i++) {
+            char c = (char)tolower((unsigned char)a[i]);
+            if (c == 'y') return 1;
+            if (c == 'n') return 0;
+        }
+        if (a.find("是") != string::npos) return 1;
+        if (a.find("否") != string::npos || a.find("不") != string::npos) return 0;
+        return -1;
     }
     // ---------- 座位 ----------
     // 从 from 顺时针找下一个活人(跳过 from 本身)
@@ -872,8 +936,11 @@ struct Game {
                 Player &p = P(id);
                 int t = 0;
                 if (p.bot || !p.connected) {
-                    t = pick(ids);
-                    if (t == id) t = 0;
+                    int a = aiBotChoose(p, "白天投票环节: 你要投票放逐谁? (也可弃票)",
+                                        ids, true);
+                    if (a > 0 && a != id) t = a;
+                    else if (a == 0) t = 0;
+                    else { t = pick(ids); if (t == id) t = 0; }
                 } else {
                     std::unique_lock<std::mutex> lk(p.mx);
                     p.cv.wait_until(lk, deadline,
