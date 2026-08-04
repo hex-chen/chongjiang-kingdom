@@ -25,3 +25,15 @@ jobs:
         run: cl /std:c++17 /EHsc /utf-8 /O2 src\client.cpp /Fe:client.exe
       - name: Bot-only full game
         run: .\server.exe --selftest 8
+
+  # 与发布用的静态 exe 相同的构建方式 (MinGW -static)
+  windows-mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static exes
+        run: |
+          g++ -std=c++17 -O2 -static -o server.exe src/server.cpp -lws2_32
+          g++ -std=c++17 -O2 -static -o client.exe src/client.cpp -lws2_32
+      - name: Bot-only full game
+        run: .\server.exe --selftest 8
